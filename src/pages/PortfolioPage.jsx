@@ -1,7 +1,7 @@
       import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
-import { Settings, ArrowLeft, Package, BookOpen, Minus, Plus, X, Layers } from 'lucide-react';
+import { Settings, ArrowLeft, Package, BookOpen, Minus, Plus, X, Layers, ArrowUpDown, Filter, CheckSquare, Download, Tag } from 'lucide-react';
 import CardDetailModal from '../components/CardDetailModal';
 import * as pokemonApi from '../api/pokemonTcg';
 import mtgLogo from '../assets/mtg_logo.png';
@@ -599,6 +599,9 @@ export default function PortfolioPage() {
                   platform={platform}
                   onEdit={handleCardEdit}
                   game={selectedGame}
+                  allCards={gameCards}
+                  userId={user?.id}
+                  onRefresh={fetchCards}
                 />
               )}
             </div>
@@ -611,6 +614,9 @@ export default function PortfolioPage() {
               platform={platform}
               onEdit={handleCardEdit}
               game={selectedGame}
+              allCards={gameCards}
+              userId={user?.id}
+              onRefresh={fetchCards}
             />
           )}
         </>
@@ -660,9 +666,16 @@ export default function PortfolioPage() {
   );
 }
 
-// ─── Reusable Card Grid (matches Find a Card style) ─────────────────
-function CardImageGrid({ uniqueCards, platform, onEdit, game }) {
+// ─── Reusable Card Grid with Sort, Filter, Bulk, Export ─────────────
+const BULK_THRESHOLD = 1.00;
+
+function CardImageGrid({ uniqueCards, platform, onEdit, game, allCards, userId, onRefresh }) {
   const [imageCache, setImageCache] = useState({});
+  const [sortBy, setSortBy] = useState('name'); // name | price-high | price-low | set
+  const [filterType, setFilterType] = useState('all'); // all | collection | inventory | bulk | individual
+  const [showControls, setShowControls] = useState(false);
+  const [bulkMode, setBulkMode] = useState(false);
+  const [selected, setSelected] = useState(new Set());
 
   // Fetch images for cards
   useEffect(() => {
@@ -674,13 +687,11 @@ function CardImageGrid({ uniqueCards, platform, onEdit, game }) {
       const newCache = {};
 
       if (game === 'pokemon') {
-        // Pokemon: use TCGdex
         const pokeCache = await pokemonApi.fetchCardImages(toFetch);
         Object.entries(pokeCache).forEach(([key, img]) => {
           newCache[key] = { image: img, price_usd: null };
         });
       } else {
-        // MTG: batch via Scryfall collection endpoint
         for (let i = 0; i < toFetch.length; i += 75) {
           const batch = toFetch.slice(i, i + 75);
           try {
@@ -715,57 +726,277 @@ function CardImageGrid({ uniqueCards, platform, onEdit, game }) {
     return () => { cancelled = true; };
   }, [uniqueCards, game]);
 
+  // Apply filters
+  const filtered = useMemo(() => {
+    let list = uniqueCards;
+    if (filterType === 'collection') list = list.filter(c => c.collectionQty > 0);
+    else if (filterType === 'inventory') list = list.filter(c => c.inventoryQty > 0);
+    else if (filterType === 'bulk') list = list.filter(c => c.inventoryQty > 0 && c.price < BULK_THRESHOLD);
+    else if (filterType === 'individual') list = list.filter(c => c.inventoryQty > 0 && c.price >= BULK_THRESHOLD);
+    return list;
+  }, [uniqueCards, filterType]);
+
+  // Apply sorting
+  const sorted = useMemo(() => {
+    const list = [...filtered];
+    switch (sortBy) {
+      case 'price-high': return list.sort((a, b) => (b.price || 0) - (a.price || 0));
+      case 'price-low': return list.sort((a, b) => (a.price || 0) - (b.price || 0));
+      case 'set': return list.sort((a, b) => (a.set_code || '').localeCompare(b.set_code || '') || a.name.localeCompare(b.name));
+      default: return list.sort((a, b) => a.name.localeCompare(b.name));
+    }
+  }, [filtered, sortBy]);
+
+  // Bulk select helpers
+  const cardKey = (c) => `${c.name}|${c.set_code}|${c.collector_number}`;
+  const toggleSelect = (c) => {
+    const key = cardKey(c);
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+  const selectAll = () => setSelected(new Set(sorted.map(cardKey)));
+  const selectNone = () => setSelected(new Set());
+
+  // Bulk remove
+  const [bulkRemoving, setBulkRemoving] = useState(false);
+  const handleBulkRemove = async () => {
+    if (selected.size === 0 || !allCards) return;
+    setBulkRemoving(true);
+    const idsToDelete = allCards
+      .filter(c => c.type === 'inventory' && selected.has(`${c.name}|${c.set_code || ''}|${c.collector_number || ''}`))
+      .map(c => c.id);
+    if (idsToDelete.length > 0) {
+      for (let i = 0; i < idsToDelete.length; i += 100) {
+        await supabase.from('cards').delete().in('id', idsToDelete.slice(i, i + 100));
+      }
+    }
+    setSelected(new Set());
+    setBulkMode(false);
+    setBulkRemoving(false);
+    if (onRefresh) onRefresh();
+  };
+
+  // CSV export
+  const exportCSV = () => {
+    const rows = sorted.filter(c => c.inventoryQty > 0);
+    if (rows.length === 0) return;
+    const header = 'Name,Set,Collector Number,Quantity,Price (USD),Sell Recommendation\n';
+    const csvRows = rows.map(c => {
+      const tag = c.price >= BULK_THRESHOLD ? 'Individual' : 'Bulk';
+      return `"${c.name}","${c.set_code}","${c.collector_number}",${c.inventoryQty},${(c.price || 0).toFixed(2)},${tag}`;
+    }).join('\n');
+    const blob = new Blob([header + csvRows], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `inventory_${game || 'all'}_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Stats
+  const invCards = sorted.filter(c => c.inventoryQty > 0);
+  const bulkCards = invCards.filter(c => c.price < BULK_THRESHOLD);
+  const individualCards = invCards.filter(c => c.price >= BULK_THRESHOLD);
+  const bulkValue = bulkCards.reduce((s, c) => s + (c.price || 0) * c.inventoryQty, 0);
+  const individualValue = individualCards.reduce((s, c) => s + (c.price || 0) * c.inventoryQty, 0);
+
   if (uniqueCards.length === 0) {
     return <p className="text-gray-400 text-center py-12">No cards found.</p>;
   }
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-5">
-      {uniqueCards.map((c, i) => {
-        const cacheKey = `${c.set_code}|${c.collector_number}`;
-        const cached = imageCache[cacheKey];
-        const displayPrice = cached?.price_usd ?? c.price;
-        const breakdown = calcSellingBreakdown(displayPrice, platform);
-        return (
-          <div
-            key={`${c.name}-${c.set_code}-${c.collector_number}-${i}`}
-            onClick={() => onEdit(c)}
-            className="group bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-200 overflow-hidden hover:-translate-y-1 cursor-pointer relative"
+    <div>
+      {/* ── Sell Recommendation Summary ── */}
+      {invCards.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <button
+            onClick={() => setFilterType(filterType === 'individual' ? 'all' : 'individual')}
+            className={`rounded-xl border p-3 text-left transition-all ${
+              filterType === 'individual' ? 'border-green-400 bg-green-50 shadow-sm' : 'border-gray-200 bg-white hover:border-green-300'
+            }`}
           >
-            {/* Card image */}
-            <div className="w-full aspect-[2.5/3.5] bg-gray-50 overflow-hidden">
-              {cached?.image ? (
-                <img src={cached.image} alt={c.name} className="w-full h-full object-cover" loading="lazy" />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center">
-                  <span className="text-3xl opacity-20">🃏</span>
+            <div className="flex items-center gap-1.5 mb-1">
+              <Tag size={14} className="text-green-600" />
+              <span className="text-xs font-semibold text-green-700 uppercase">Sell Individual</span>
+            </div>
+            <p className="text-lg font-bold text-gray-900">{individualCards.length} <span className="text-xs font-normal text-gray-500">cards</span></p>
+            <p className="text-xs text-gray-500">${individualValue.toFixed(2)} value &bull; ≥$1 each</p>
+          </button>
+          <button
+            onClick={() => setFilterType(filterType === 'bulk' ? 'all' : 'bulk')}
+            className={`rounded-xl border p-3 text-left transition-all ${
+              filterType === 'bulk' ? 'border-amber-400 bg-amber-50 shadow-sm' : 'border-gray-200 bg-white hover:border-amber-300'
+            }`}
+          >
+            <div className="flex items-center gap-1.5 mb-1">
+              <Tag size={14} className="text-amber-600" />
+              <span className="text-xs font-semibold text-amber-700 uppercase">Sell as Bulk</span>
+            </div>
+            <p className="text-lg font-bold text-gray-900">{bulkCards.length} <span className="text-xs font-normal text-gray-500">cards</span></p>
+            <p className="text-xs text-gray-500">${bulkValue.toFixed(2)} value &bull; under $1</p>
+          </button>
+        </div>
+      )}
+
+      {/* ── Toolbar ── */}
+      <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Sort */}
+          <div className="relative">
+            <select
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value)}
+              className="appearance-none pl-8 pr-4 py-2 rounded-lg bg-white border border-gray-200 text-sm text-gray-700 font-medium cursor-pointer hover:border-gray-300 transition-colors"
+            >
+              <option value="name">Name A–Z</option>
+              <option value="price-high">Price: High → Low</option>
+              <option value="price-low">Price: Low → High</option>
+              <option value="set">Set Code</option>
+            </select>
+            <ArrowUpDown size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
+
+          {/* Filter */}
+          <div className="relative">
+            <select
+              value={filterType}
+              onChange={e => setFilterType(e.target.value)}
+              className="appearance-none pl-8 pr-4 py-2 rounded-lg bg-white border border-gray-200 text-sm text-gray-700 font-medium cursor-pointer hover:border-gray-300 transition-colors"
+            >
+              <option value="all">All Cards</option>
+              <option value="collection">Collection Only</option>
+              <option value="inventory">Inventory Only</option>
+              <option value="individual">Individual (≥$1)</option>
+              <option value="bulk">Bulk (&lt;$1)</option>
+            </select>
+            <Filter size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Bulk select toggle */}
+          <button
+            onClick={() => { setBulkMode(!bulkMode); setSelected(new Set()); }}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+              bulkMode ? 'bg-blue-green text-white' : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <CheckSquare size={14} />
+            Select
+          </button>
+
+          {/* CSV export */}
+          <button
+            onClick={exportCSV}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
+            title="Export inventory as CSV"
+          >
+            <Download size={14} />
+            CSV
+          </button>
+        </div>
+      </div>
+
+      {/* Bulk action bar */}
+      {bulkMode && (
+        <div className="flex items-center justify-between bg-gray-50 rounded-xl border border-gray-200 px-4 py-3 mb-4">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium text-gray-700">{selected.size} selected</span>
+            <button onClick={selectAll} className="text-xs text-blue-green font-medium hover:underline">Select All</button>
+            <button onClick={selectNone} className="text-xs text-gray-500 font-medium hover:underline">Clear</button>
+          </div>
+          <button
+            onClick={handleBulkRemove}
+            disabled={selected.size === 0 || bulkRemoving}
+            className="px-4 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {bulkRemoving ? 'Removing...' : 'Remove from Inventory'}
+          </button>
+        </div>
+      )}
+
+      {/* Results count */}
+      <p className="text-xs text-gray-400 mb-3">{sorted.length} card{sorted.length !== 1 ? 's' : ''}</p>
+
+      {/* Card grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-5">
+        {sorted.map((c, i) => {
+          const cacheKey = `${c.set_code}|${c.collector_number}`;
+          const cached = imageCache[cacheKey];
+          const displayPrice = cached?.price_usd ?? c.price;
+          const isIndividual = c.inventoryQty > 0 && displayPrice >= BULK_THRESHOLD;
+          const isBulk = c.inventoryQty > 0 && displayPrice < BULK_THRESHOLD;
+          const key = cardKey(c);
+          const isSelected = selected.has(key);
+
+          return (
+            <div
+              key={`${c.name}-${c.set_code}-${c.collector_number}-${i}`}
+              onClick={() => bulkMode ? toggleSelect(c) : onEdit(c)}
+              className={`group bg-white rounded-xl border shadow-sm hover:shadow-lg transition-all duration-200 overflow-hidden hover:-translate-y-1 cursor-pointer relative ${
+                isSelected ? 'border-blue-green ring-2 ring-blue-green/30' : 'border-gray-200'
+              }`}
+            >
+              {/* Bulk select checkbox */}
+              {bulkMode && (
+                <div className={`absolute top-2 right-2 z-10 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-colors ${
+                  isSelected ? 'bg-blue-green border-blue-green' : 'bg-white/80 border-gray-300'
+                }`}>
+                  {isSelected && <span className="text-white text-xs font-bold">✓</span>}
                 </div>
               )}
+
+              {/* Card image */}
+              <div className="w-full aspect-[2.5/3.5] bg-gray-50 overflow-hidden">
+                {cached?.image ? (
+                  <img src={cached.image} alt={c.name} className="w-full h-full object-cover" loading="lazy" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center">
+                    <span className="text-3xl opacity-20">🃏</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Quantity badges */}
+              <div className="absolute top-2 left-2 flex gap-1">
+                {c.collectionQty > 0 && (
+                  <span className="flex items-center gap-0.5 bg-blue-green text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow">
+                    <BookOpen size={10} /> {c.collectionQty}
+                  </span>
+                )}
+                {c.inventoryQty > 0 && (
+                  <span className="flex items-center gap-0.5 bg-princeton-orange text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow">
+                    <Package size={10} /> {c.inventoryQty}
+                  </span>
+                )}
+              </div>
+
+              {/* Info */}
+              <div className="p-3">
+                <h3 className="text-sm font-semibold text-gray-900 truncate">{c.name}</h3>
+                <p className="text-xs text-gray-400 mt-0.5">{c.set_code} &bull; #{c.collector_number}</p>
+                <div className="flex items-center justify-between mt-1">
+                  {displayPrice > 0 && (
+                    <p className="text-sm font-bold text-gray-900">${displayPrice.toFixed(2)}</p>
+                  )}
+                  {/* Sell recommendation tag */}
+                  {c.inventoryQty > 0 && (
+                    <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-full ${
+                      isIndividual ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      {isIndividual ? 'Individual' : 'Bulk'}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
-            {/* Quantity badges */}
-            <div className="absolute top-2 left-2 flex gap-1">
-              {c.collectionQty > 0 && (
-                <span className="flex items-center gap-0.5 bg-blue-green text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow">
-                  <BookOpen size={10} /> {c.collectionQty}
-                </span>
-              )}
-              {c.inventoryQty > 0 && (
-                <span className="flex items-center gap-0.5 bg-princeton-orange text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow">
-                  <Package size={10} /> {c.inventoryQty}
-                </span>
-              )}
-            </div>
-            {/* Info */}
-            <div className="p-3">
-              <h3 className="text-sm font-semibold text-gray-900 truncate">{c.name}</h3>
-              <p className="text-xs text-gray-400 mt-0.5">{c.set_code} &bull; #{c.collector_number}</p>
-              {displayPrice > 0 && (
-                <p className="text-sm font-bold text-gray-900 mt-1">${displayPrice.toFixed(2)}</p>
-              )}
-            </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
