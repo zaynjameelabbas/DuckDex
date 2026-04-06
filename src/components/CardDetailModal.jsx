@@ -311,7 +311,7 @@ export default function CardDetailModal({ card, onClose, onAddToCollection, onAd
               <QuantityEditor
                 initialCol={collectionQty}
                 initialInv={inventoryQty}
-                onSave={onSaveQuantity}
+                onSave={(newCol, newInv) => onSaveQuantity(newCol, newInv, activePrice)}
               />
             )}
 

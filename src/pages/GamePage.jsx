@@ -19,6 +19,7 @@ const TABS = [
 ];
 
 export default function GamePage({ game, onBack }) {
+  const { user } = useAuth();
   const meta = GAME_META[game];
   const [activeTab, setActiveTab] = useState('my-cards');
   const [cards, setCards] = useState([]);
@@ -225,7 +226,7 @@ export default function GamePage({ game, onBack }) {
   };
 
   // Handle saving qty from modal (works for both My Cards and Search modals)
-  const handleSaveQuantity = async (modalCard, newCol, newInv, closeModal) => {
+  const handleSaveQuantity = async (modalCard, newCol, newInv, closeModal, activePrice) => {
     const matching = cards.filter(c =>
       c.name === modalCard.name &&
       (c.set_code || '') === (modalCard.set_code || '') &&
@@ -235,7 +236,7 @@ export default function GamePage({ game, onBack }) {
     const invCards = matching.filter(c => c.type === 'inventory');
     const colDiff = newCol - colCards.length;
     const invDiff = newInv - invCards.length;
-    const price = modalCard.price_usd || Number(matching[0]?.price_cad) || null;
+    const price = activePrice ?? modalCard.price_usd ?? Number(matching[0]?.price_cad) ?? null;
 
     if (colDiff < 0) await supabase.from('cards').delete().in('id', colCards.slice(0, Math.abs(colDiff)).map(c => c.id));
     if (colDiff > 0) await supabase.from('cards').insert(Array.from({ length: colDiff }, () => ({
@@ -715,7 +716,7 @@ export default function GamePage({ game, onBack }) {
             onClose={() => setSelectedMyCard(null)}
             collectionQty={colQty}
             inventoryQty={invQty}
-            onSaveQuantity={(newCol, newInv) => handleSaveQuantity(selectedMyCard, newCol, newInv, () => setSelectedMyCard(null))}
+            onSaveQuantity={(newCol, newInv, activePrice) => handleSaveQuantity(selectedMyCard, newCol, newInv, () => setSelectedMyCard(null), activePrice)}
           />
         );
       })()}
@@ -730,7 +731,7 @@ export default function GamePage({ game, onBack }) {
             onClose={() => setSelectedSearchCard(null)}
             collectionQty={colQty}
             inventoryQty={invQty}
-            onSaveQuantity={(newCol, newInv) => handleSaveQuantity(selectedSearchCard, newCol, newInv, () => setSelectedSearchCard(null))}
+            onSaveQuantity={(newCol, newInv, activePrice) => handleSaveQuantity(selectedSearchCard, newCol, newInv, () => setSelectedSearchCard(null), activePrice)}
           />
         );
       })()}
