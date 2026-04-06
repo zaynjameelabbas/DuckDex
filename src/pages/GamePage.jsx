@@ -265,7 +265,7 @@ export default function GamePage({ game, onBack }) {
         const results = await pokemonApi.searchCards(query);
         setSearchResults(results);
       } else {
-        const res = await fetch(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&order=released&dir=desc`);
+        const res = await fetch(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&unique=prints&order=released&dir=desc`);
         const data = await res.json();
         if (data.data) {
           setSearchResults(data.data.slice(0, 20).map(c => ({
