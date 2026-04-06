@@ -272,6 +272,15 @@ export default function GamePage({ game, onBack }) {
             set_code: c.set.toUpperCase(),
             collector_number: c.collector_number,
             image: c.image_uris?.normal || c.card_faces?.[0]?.image_uris?.normal || null,
+            image_large: c.image_uris?.large || c.card_faces?.[0]?.image_uris?.large || null,
+            rarity: c.rarity,
+            type_line: c.type_line || null,
+            mana_cost: c.mana_cost || null,
+            oracle_text: c.oracle_text || c.card_faces?.[0]?.oracle_text || null,
+            power: c.power ?? null,
+            toughness: c.toughness ?? null,
+            price_usd: c.prices?.usd ? parseFloat(c.prices.usd) : null,
+            price_usd_foil: c.prices?.usd_foil ? parseFloat(c.prices.usd_foil) : null,
             price_cad: c.prices?.usd ? parseFloat(c.prices.usd) : null,
           })));
         } else {
@@ -287,6 +296,7 @@ export default function GamePage({ game, onBack }) {
   // Add a card to Supabase (collection)
   const handleAddCard = async (card) => {
     setAdding(true);
+    const price = card._activePrice ?? card.price_usd ?? card.price_cad ?? null;
     const { data, error: err } = await supabase
       .from('cards')
       .insert([{
@@ -294,7 +304,7 @@ export default function GamePage({ game, onBack }) {
         set_code: card.set_code || '',
         collector_number: card.collector_number || '',
         game,
-        price_cad: card.price_usd || card.price_cad || null,
+        price_cad: price,
         type: 'collection',
         user_id: user.id,
       }])
@@ -308,6 +318,7 @@ export default function GamePage({ game, onBack }) {
   // Add a card to inventory (for selling)
   const handleAddToInventory = async (card) => {
     setAdding(true);
+    const price = card._activePrice ?? card.price_usd ?? card.price_cad ?? null;
     const { data, error: err } = await supabase
       .from('cards')
       .insert([{
@@ -315,7 +326,7 @@ export default function GamePage({ game, onBack }) {
         set_code: card.set_code || '',
         collector_number: card.collector_number || '',
         game,
-        price_cad: card.price_usd || card.price_cad || null,
+        price_cad: price,
         type: 'inventory',
         user_id: user.id,
       }])

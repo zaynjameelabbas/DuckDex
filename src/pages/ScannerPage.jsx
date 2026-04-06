@@ -255,12 +255,13 @@ export default function ScannerPage() {
 
   // Add card to collection/inventory
   const addCard = async (card, type) => {
+    const price = card._activePrice ?? card.price_usd ?? null;
     const { error: err } = await supabase.from('cards').insert([{
       name: card.name,
       set_code: card.set_code || '',
       collector_number: card.collector_number || '',
       game: selectedGame,
-      price_cad: card.price_usd || null,
+      price_cad: price,
       type,
       user_id: user.id,
     }]);

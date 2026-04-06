@@ -44,10 +44,14 @@ function EnergyIcon({ type, size = 20 }) {
 
 export default function CardDetailModal({ card, onClose, onAddToCollection, onAddToInventory, collectionQty, inventoryQty, onSaveQuantity }) {
   const [expanded, setExpanded] = useState(false);
+  const hasNormal = card?.price_usd != null;
+  const hasFoil = card?.price_usd_foil != null;
+  const [finish, setFinish] = useState(hasNormal ? 'normal' : hasFoil ? 'foil' : 'normal');
   if (!card) return null;
 
   const hasQtyEditor = collectionQty != null && inventoryQty != null && onSaveQuantity;
   const imageSrc = card.image_large || card.image;
+  const activePrice = finish === 'foil' ? card.price_usd_foil : card.price_usd;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -271,6 +275,35 @@ export default function CardDetailModal({ card, onClose, onAddToCollection, onAd
                   </p>
                 </div>
               </div>
+
+              {/* Finish selector */}
+              {(hasNormal || hasFoil) && (
+                <div className="mt-3">
+                  <p className="text-xs font-semibold text-gray-400 uppercase mb-2">Finish</p>
+                  <div className="inline-flex rounded-lg bg-gray-100 p-0.5">
+                    <button
+                      onClick={() => setFinish('normal')}
+                      className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                        finish === 'normal'
+                          ? 'bg-white text-gray-900 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      Normal
+                    </button>
+                    <button
+                      onClick={() => setFinish('foil')}
+                      className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                        finish === 'foil'
+                          ? 'bg-white text-gray-900 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      Foil ✨
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Quantity Editor (when viewing owned cards) */}
@@ -287,7 +320,7 @@ export default function CardDetailModal({ card, onClose, onAddToCollection, onAd
               <div className="flex gap-3 mt-6">
                 {onAddToCollection && (
                   <button
-                    onClick={() => onAddToCollection(card)}
+                    onClick={() => onAddToCollection({ ...card, _finish: finish, _activePrice: activePrice })}
                     className="flex-1 flex items-center justify-center gap-2 bg-blue-green hover:bg-blue-green/90 text-white rounded-lg py-2.5 text-sm font-semibold shadow-sm transition-colors"
                   >
                     <Plus size={16} />
@@ -296,7 +329,7 @@ export default function CardDetailModal({ card, onClose, onAddToCollection, onAd
                 )}
                 {onAddToInventory && (
                   <button
-                    onClick={() => onAddToInventory(card)}
+                    onClick={() => onAddToInventory({ ...card, _finish: finish, _activePrice: activePrice })}
                     className="flex-1 flex items-center justify-center gap-2 bg-princeton-orange hover:bg-amber-flame text-white rounded-lg py-2.5 text-sm font-semibold shadow-sm transition-colors"
                   >
                     <Package size={16} />
